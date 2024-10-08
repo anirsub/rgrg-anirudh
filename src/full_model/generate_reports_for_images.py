@@ -5,22 +5,34 @@ before running this script.
 If you encounter any spacy-related errors, try upgrading spacy to version 3.5.3 and spacy-transformers to version 1.2.5
 pip install -U spacy
 pip install -U spacy-transformers
+
+
+RUN COMMAND
+python ./src/full_model/generate_reports_for_images.py \
+--model_path /opt/gpudata/rrg-data-2/inference-all/inf-models/rgrg/rgrg_full_model_checkpoint_val_loss_19.793_overall_steps_155252.pt \
+--input_csv /opt/gpudata/rrg-data-2/inference-all/inference_findings_data.csv \
+--output_csv /opt/gpudata/rrg-data-2/inference-all/inf-results/rgrg/generations_findings.csv
+
 """
 
 from collections import defaultdict
 
+import os
+import argparse
 import albumentations as A
 import cv2
 import evaluate
 import spacy
 import torch
+import pandas as pd
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+
 
 from src.full_model.report_generation_model import ReportGenerationModel
 from src.full_model.train_full_model import get_tokenizer
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 BERTSCORE_SIMILARITY_THRESHOLD = 0.9
 IMAGE_INPUT_SIZE = 512
@@ -28,6 +40,27 @@ MAX_NUM_TOKENS_GENERATE = 300
 NUM_BEAMS = 4
 mean = 0.471  # see get_transforms in src/dataset/compute_mean_std_dataset.py
 std = 0.302
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_path",
+        required=True,
+        help="Path to model checkpoint",
+    )
+    parser.add_argument(
+        "--input_csv",
+        required=True,
+        help="Path to a csv file containing the image path information for inference",
+    )
+    parser.add_argument(
+        "--output_csv",
+        required=True,
+        help="Path to save the model generated findings",
+    )
+    args = parser.parse_args()
+    return args
 
 
 def write_generated_reports_to_txt(images_paths, generated_reports, generated_reports_txt_path):
@@ -168,19 +201,24 @@ def get_model(checkpoint_path):
 
 
 def main():
-    checkpoint_path = ".../___.pt"
+    args = parse_args()
+    # checkpoint_path = ".../___.pt"
+    checkpoint_path = args.model_path
     model = get_model(checkpoint_path)
 
     print("Model instantiated.")
 
     # paths to the images that we want to generate reports for
-    images_paths = [
-        ".../___.jpg",
-        ".../___.jpg",
-        ".../___.jpg",
-    ]
+    paths_df = pd.read_csv(args.input_csv)
+    print(paths_df.columns)
+    # images_paths = [
+    #     ".../___.jpg",
+    #     ".../___.jpg",
+    #     ".../___.jpg",
+    # ]
+    images_paths = paths_df["dicom_path"].tolist()
 
-    generated_reports_txt_path = ".../___.txt"
+    # generated_reports_txt_path = ".../___.txt"
     generated_reports = []
 
     bert_score = evaluate.load("bertscore")
@@ -196,7 +234,18 @@ def main():
         generated_report = get_report_for_image(model, image_tensor, tokenizer, bert_score, sentence_tokenizer)
         generated_reports.append(generated_report)
 
-    write_generated_reports_to_txt(images_paths, generated_reports, generated_reports_txt_path)
+    # write_generated_reports_to_txt(images_paths, generated_reports, generated_reports_txt_path)
+    pd.DataFrame(
+            {
+                "study_id" : paths_df["study_id"].tolist(),
+                "actual_text" : paths_df["findings"].tolist(),
+                "generated_text" : generated_reports
+            }
+        ).to_csv(
+            args.output_csv,
+            mode="w",
+            index=False,
+            )
 
 
 if __name__ == "__main__":
